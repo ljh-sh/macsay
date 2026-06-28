@@ -89,14 +89,20 @@ private func resolveLocale(_ p: ParsedCmd) -> String {
 enum SayCmd: Cmd {
     static let meta = CmdMeta(
         name: "say",
-        desc: "Speak text aloud using NSSpeechSynthesizer, auto-detecting mixed languages",
+        desc: "Speak text aloud, auto-detecting mixed languages",
         opts: localeOptions + [
             OptMeta(name: "--rate", type: Double.self, desc: "Speech rate (words per minute, default: 200)", `default`: 200.0),
             OptMeta(name: "--pitch", type: Double.self, desc: "Pitch multiplier (0.5-2.0, default: 1.0)", `default`: 1.0),
             OptMeta(name: "--volume", type: Double.self, desc: "Volume (0.0-1.0, default: 1.0)", `default`: 1.0),
             OptMeta(name: "--wait", type: Bool.self, desc: "Wait for speech to finish before exiting (default: true)"),
-            OptMeta(name: "--output", type: String.self, desc: "Save audio to file (AIFF format)"),
-            OptMeta(name: "--engine", type: String.self, desc: "TTS engine to use: nsspeech (default)", `default`: "nsspeech"),
+            OptMeta(name: "--output", type: String.self, desc: "Save audio to file (AIFF format for nsspeech, WAV for mlx)"),
+            OptMeta(name: "--engine", type: String.self, desc: "TTS engine: nsspeech (default) | mlx", `default`: "nsspeech"),
+            OptMeta(name: "--mlx-model", type: String.self, desc: "MLX model path (default: models/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit)", `default`: "models/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"),
+            OptMeta(name: "--mlx-speaker", type: String.self, desc: "MLX speaker name (Ryan / Aiden)", `default`: "Ryan"),
+            OptMeta(name: "--mlx-voice-design", type: String.self, desc: "MLX voice design prompt (e.g. 'female, British narrator')"),
+            OptMeta(name: "--mlx-ref-audio", type: String.self, desc: "MLX reference audio path (Base model voice clone)"),
+            OptMeta(name: "--mlx-ref-text", type: String.self, desc: "MLX reference transcript"),
+            OptMeta(name: "--mlx-venv", type: String.self, desc: "MLX Python venv path (auto-detected from CWD if not set)"),
             OptMeta(name: "--json", type: Bool.self, desc: "Output JSON (default)"),
         ],
         args: [ArgMeta(name: "text", desc: "Text to speak", required: false)],
@@ -124,27 +130,79 @@ enum SayCmd: Cmd {
                 cmdError("text required")
             }
 
-            // Auto-detect language segments
-            let segments = detectLanguages(text)
-
-            if let outputPath = output {
-                try? recordTTS(segments: segments, outputPath: outputPath)
-                printJson(["ok": true, "engine": engine, "locale": locale, "text": text, "output": outputPath, "segments": segments.count])
-            } else {
-                for segment in segments {
-                    let synthesizer = NSSpeechSynthesizer()
-                    if let voice = findBestVoice(for: segment.locale) {
-                        synthesizer.setVoice(voice)
-                    }
-                    synthesizer.startSpeaking(segment.text)
-                    while synthesizer.isSpeaking {
-                        usleep(50_000)
-                    }
-                }
-                printJson(["ok": true, "engine": engine, "locale": locale, "text": text, "segments": segments.count])
+            // Dispatch to the chosen engine.
+            switch engine.lowercased() {
+            case "mlx":
+                try runMlx(text: text, p: p, output: output, locale: locale)
+            case "nsspeech", "":
+                runNsSpeech(text: text, output: output, locale: locale)
+            default:
+                cmdError("unknown engine: \(engine) (use 'nsspeech' or 'mlx')")
             }
         }
     )
+}
+
+/// NSSpeechSynthesizer path: split by language and speak each segment.
+private func runNsSpeech(text: String, output: String?, locale: String) {
+    let segments = detectLanguages(text)
+    if let outputPath = output {
+        try? recordTTS(segments: segments, outputPath: outputPath)
+        printJson(["ok": true, "engine": "nsspeech", "locale": locale, "text": text, "output": outputPath, "segments": segments.count])
+    } else {
+        for segment in segments {
+            let synthesizer = NSSpeechSynthesizer()
+            if let voice = findBestVoice(for: segment.locale) {
+                synthesizer.setVoice(voice)
+            }
+            synthesizer.startSpeaking(segment.text)
+            while synthesizer.isSpeaking {
+                usleep(50_000)
+            }
+        }
+        printJson(["ok": true, "engine": "nsspeech", "locale": locale, "text": text, "segments": segments.count])
+    }
+}
+
+/// MLX path: hand the text to the Python helper which uses Qwen3-TTS.
+/// Always writes to a file (mlx-audio's strength is offline high-quality synthesis).
+private func runMlx(text: String, p: ParsedCmd, output: String?, locale: String) throws {
+    let model = p.opt("--mlx-model") as String? ?? "models/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
+    let speaker = p.opt("--mlx-speaker") as String? ?? "Ryan"
+    let voiceDesign = p.opt("--mlx-voice-design") as String?
+    let refAudio = p.opt("--mlx-ref-audio") as String?
+    let refText = p.opt("--mlx-ref-text") as String?
+    let venvPath = p.opt("--mlx-venv") as String?
+
+    var config = MlxEngine.Config(
+        model: model,
+        speaker: speaker,
+        refAudio: refAudio,
+        refText: refText,
+    )
+    if let d = voiceDesign { config.voiceDesign = d }
+    if refAudio == nil && refText != nil { config.refText = refText }
+    if let v = venvPath { config.venvPath = v }
+
+    // MLX only writes to files; honor the user-specified path or generate one.
+    let userOutput = output
+
+    do {
+        let result = try MlxEngine.synthesize(text: text, config: config, outputDir: "/tmp/macsay_mlx_output")
+        if userOutput == nil {
+            // Best-effort playback via afplay (system tool).
+            let p2 = Process()
+            p2.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
+            p2.arguments = [result]
+            try? p2.run()
+            p2.waitUntilExit()
+        }
+        printJson(["ok": true, "engine": "mlx", "locale": locale, "text": text, "output": result, "model": model, "speaker": speaker])
+    } catch let e as MlxEngine.MlxError {
+        cmdError("mlx engine error: \(e)")
+    } catch {
+        cmdError("mlx engine error: \(error.localizedDescription)")
+    }
 }
 
 enum VoicesCmd: Cmd {
