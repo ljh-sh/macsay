@@ -88,7 +88,7 @@ private func resolveLocale(_ p: ParsedCmd) -> String {
 
 enum SayCmd: Cmd {
     static let meta = CmdMeta(
-        name: "say",
+        name: "macsay",
         desc: "Speak text aloud, auto-detecting mixed languages",
         opts: localeOptions + [
             OptMeta(name: "--rate", type: Double.self, desc: "Speech rate (words per minute, default: 200)", `default`: 200.0),
