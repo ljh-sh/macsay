@@ -8,9 +8,13 @@ import Foundation
 /// - CustomVoice: pre-defined voices like "Ryan" / "Aiden"
 /// - Base: 3-second voice clone from a reference audio + transcript
 ///
-/// Models are downloaded from the MLX Community on Hugging Face. The CLI
-/// shells out to Python rather than linking MLX directly, keeping the macsay
-/// binary small and avoiding an MLX runtime dependency.
+/// Why Python helper? `Blaizzy/mlx-audio-swift` exists as a Swift port, but
+/// `mlx-swift` requires the Metal toolchain (not available on every
+/// developer machine). See `MlxEngineNative.swift` for the Swift path that
+/// will replace this once the toolchain is fixed.
+///
+/// Models can be either a Hugging Face repo id (auto-downloaded by
+/// `mlx_audio` on first run) or a local directory path.
 enum MlxEngine {
     struct Config {
         var model: String = "models/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
@@ -37,7 +41,6 @@ enum MlxEngine {
     /// Run TTS via the bundled Python helper. Returns the path of the generated
     /// audio file (typically `output_dir/<name>.<audioFormat>`).
     static func synthesize(text: String, config: Config, outputDir: String) throws -> String {
-        // Sanity checks up front — fail fast with a clean error.
         guard FileManager.default.isExecutableFile(atPath: config.pythonPath) else {
             throw MlxError.pythonNotFound(config.pythonPath)
         }
@@ -49,7 +52,6 @@ enum MlxEngine {
             throw MlxError.modelNotFound(config.model)
         }
 
-        // Locate the bundled helper script.
         let helperPath = locateHelper()
         guard FileManager.default.fileExists(atPath: helperPath) else {
             throw MlxError.synthesisFailed("helper not found: \(helperPath)")
@@ -86,10 +88,6 @@ enum MlxEngine {
         return "\(outputDir)/out.\(config.audioFormat)"
     }
 
-    /// Find a usable venv Python: try the configured path first, then probe
-    /// common locations relative to the current working directory. Returns the
-    /// configured path if nothing else is found (caller will then surface a
-    /// clean `venvNotFound` error).
     private static func locateVenvPython(fallback: String) -> String {
         let fm = FileManager.default
         let candidates: [String] = [
@@ -105,7 +103,6 @@ enum MlxEngine {
     }
 
     private static func locateHelper() -> String {
-        // Look for the helper relative to the executable first, then the cwd.
         let cwd = FileManager.default.currentDirectoryPath
         let candidates = [
             cwd + "/qwen3-tts/qwen3_tts_helper.py",
@@ -116,6 +113,6 @@ enum MlxEngine {
         for c in candidates {
             if FileManager.default.fileExists(atPath: c) { return c }
         }
-        return candidates[0] // Will be reported as missing above
+        return candidates[0]
     }
 }
