@@ -97,12 +97,12 @@ enum SayCmd: Cmd {
             OptMeta(name: "--wait", type: Bool.self, desc: "Wait for speech to finish before exiting (default: true)"),
             OptMeta(name: "--output", type: String.self, desc: "Save audio to file (AIFF format for nsspeech, WAV for mlx)"),
             OptMeta(name: "--engine", type: String.self, desc: "TTS engine: nsspeech (default) | mlx", `default`: "nsspeech"),
-            OptMeta(name: "--mlx-model", type: String.self, desc: "MLX model path (default: models/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit)", `default`: "models/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"),
+            OptMeta(name: "--mlx-model", type: String.self, desc: "MLX model: HF repo id (mlx-community/...) or local path", `default`: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"),
             OptMeta(name: "--mlx-speaker", type: String.self, desc: "MLX speaker name (Ryan / Aiden)", `default`: "Ryan"),
             OptMeta(name: "--mlx-voice-design", type: String.self, desc: "MLX voice design prompt (e.g. 'female, British narrator')"),
             OptMeta(name: "--mlx-ref-audio", type: String.self, desc: "MLX reference audio path (Base model voice clone)"),
             OptMeta(name: "--mlx-ref-text", type: String.self, desc: "MLX reference transcript"),
-            OptMeta(name: "--mlx-venv", type: String.self, desc: "MLX Python venv path (auto-detected from CWD if not set)"),
+            OptMeta(name: "--mlx-lang", type: String.self, desc: "MLX language (English / Chinese / etc.)", `default`: "English"),
             OptMeta(name: "--json", type: Bool.self, desc: "Output JSON (default)"),
         ],
         args: [ArgMeta(name: "text", desc: "Text to speak", required: false)],
@@ -133,7 +133,7 @@ enum SayCmd: Cmd {
             // Dispatch to the chosen engine.
             switch engine.lowercased() {
             case "mlx":
-                try runMlx(text: text, p: p, output: output, locale: locale)
+                try await runMlxNative(text: text, p: p, output: output, locale: locale)
             case "nsspeech", "":
                 runNsSpeech(text: text, output: output, locale: locale)
             default:
@@ -164,33 +164,35 @@ private func runNsSpeech(text: String, output: String?, locale: String) {
     }
 }
 
-/// MLX path: hand the text to the Python helper which uses Qwen3-TTS.
-/// Always writes to a file (mlx-audio's strength is offline high-quality synthesis).
-private func runMlx(text: String, p: ParsedCmd, output: String?, locale: String) throws {
-    let model = p.opt("--mlx-model") as String? ?? "models/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
+/// MLX path: in-process Swift MLX inference via mlx-audio-swift.
+/// Always writes to a file; if no output is given, plays via afplay.
+private func runMlxNative(text: String, p: ParsedCmd, output: String?, locale: String) async throws {
+    let model = p.opt("--mlx-model") as String? ?? "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
     let speaker = p.opt("--mlx-speaker") as String? ?? "Ryan"
     let voiceDesign = p.opt("--mlx-voice-design") as String?
     let refAudio = p.opt("--mlx-ref-audio") as String?
     let refText = p.opt("--mlx-ref-text") as String?
-    let venvPath = p.opt("--mlx-venv") as String?
+    let lang = p.opt("--mlx-lang") as String? ?? "English"
 
-    var config = MlxEngine.Config(
+    var config = MlxEngineNative.Config(
         model: model,
         speaker: speaker,
         refAudio: refAudio,
         refText: refText,
+        lang: lang,
     )
     if let d = voiceDesign { config.voiceDesign = d }
-    if refAudio == nil && refText != nil { config.refText = refText }
-    if let v = venvPath { config.venvPath = v }
 
-    // MLX only writes to files; honor the user-specified path or generate one.
-    let userOutput = output
+    let outputURL: URL
+    if let userPath = output {
+        outputURL = URL(fileURLWithPath: userPath)
+    } else {
+        outputURL = URL(fileURLWithPath: "/tmp/macsay_mlx_output.wav")
+    }
 
     do {
-        let result = try MlxEngine.synthesize(text: text, config: config, outputDir: "/tmp/macsay_mlx_output")
-        if userOutput == nil {
-            // Best-effort playback via afplay (system tool).
+        let result = try await MlxEngineNative.synthesize(text: text, config: config, outputURL: outputURL)
+        if output == nil {
             let p2 = Process()
             p2.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
             p2.arguments = [result]
@@ -198,7 +200,7 @@ private func runMlx(text: String, p: ParsedCmd, output: String?, locale: String)
             p2.waitUntilExit()
         }
         printJson(["ok": true, "engine": "mlx", "locale": locale, "text": text, "output": result, "model": model, "speaker": speaker])
-    } catch let e as MlxEngine.MlxError {
+    } catch let e as MlxEngineNative.MlxError {
         cmdError("mlx engine error: \(e)")
     } catch {
         cmdError("mlx engine error: \(error.localizedDescription)")
