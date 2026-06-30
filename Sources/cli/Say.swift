@@ -53,13 +53,16 @@ struct LocaleShortcuts {
 }
 
 private let localeOptions: [OptMeta] = [
+    // Only the canonical --locale flag. Locale shortcut flags (--cn, --en, --ja, etc.)
+    // are NOT listed here so --help stays short. They're resolved in resolveLocale()
+    // and Cmd.swift records unknown bool flags automatically.
     OptMeta(
         name: "--locale",
         type: String.self,
         desc: "Locale identifier (default: $MACSAY_LOCALE, $LANG, or en-US)",
         multiple: true
     ),
-] + LocaleShortcuts.options
+]
 
 /// Resolve a single locale (shortcut flags take precedence, then the first
 /// `--locale` value, then the environment default).
@@ -113,7 +116,22 @@ enum SayCmd: Cmd {
             let volume = p.opt("--volume") as Double? ?? 1.0
             let wait = p.opt("--wait") as Bool? ?? true
             let output = p.opt("--output") as String?
-            let engine = p.opt("--engine") as String? ?? "nsspeech"
+
+            // Engine selection: explicit --engine wins; otherwise default to
+            // mlx if any --mlx-* option was used (since they don't make sense
+            // for the nsspeech engine), or a bare --mlx flag was passed.
+            var engine = p.opt("--engine") as String? ?? "nsspeech"
+            if engine == "nsspeech" {
+                if p.opt("--mlx") as Bool? ?? false {
+                    engine = "mlx"
+                } else {
+                    let mlxFlags = ["--mlx-model", "--mlx-speaker", "--mlx-voice-design",
+                                    "--mlx-ref-audio", "--mlx-ref-text", "--mlx-lang"]
+                    if mlxFlags.contains(where: { p.opt($0) != nil }) {
+                        engine = "mlx"
+                    }
+                }
+            }
 
             // If no text provided, read from stdin
             var text: String? = p.arg(0)

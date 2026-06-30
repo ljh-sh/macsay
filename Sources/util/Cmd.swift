@@ -98,6 +98,14 @@ func runCmd(_ type: Cmd.Type, _ args: [String]) async throws {
                         parsed.opts[optMeta.name] = raw
                     }
                 }
+            } else {
+                // Unknown option — if it's a boolean flag (no `=` value),
+                // record it as `true` so handlers can probe via `p.opt(name)`.
+                // Used for shortcut flags like --cn / --en / --ja that aren't
+                // registered in meta.opts but still need to be queryable.
+                if explicitValue == nil {
+                    parsed.opts[optName] = true
+                }
             }
         } else {
             parsed.args.append(a)
