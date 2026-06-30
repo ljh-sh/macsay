@@ -57,6 +57,17 @@ fi
 echo "Packaging mlx.metallib ..."
 xcrun metallib -o "$OUTPUT" "$PRIVATE_METAL_DIR"/*.air
 
+# Strip the binary to remove debug symbols. mlx-audio-swift pulls in
+# ~30 MB of dead code we don't reference; strip cuts that without breaking
+# the link. Safe for SwiftPM executables.
+if command -v strip >/dev/null 2>&1; then
+    STRIPPED="$BUILD_DIR/macsay.stripped"
+    cp "$BUILD_DIR/macsay" "$STRIPPED"
+    strip "$STRIPPED"
+    mv "$STRIPPED" "$BUILD_DIR/macsay"
+    echo "Stripped binary: $BUILD_DIR/macsay ($(du -h "$BUILD_DIR/macsay" | cut -f1))"
+fi
+
 # Also place alongside the installed binary so end-users don't have to
 # build it themselves. Update this path if you install elsewhere.
 if [ -d "$HOME/.local/bin" ]; then

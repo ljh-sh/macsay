@@ -240,6 +240,43 @@ enum VoicesCmd: Cmd {
     )
 }
 
+/// `macsay pull <repo>` — download an MLX-community model from Hugging Face.
+/// Auto-detects hf / uvx / x-cmd uvx and uses whichever is in PATH.
+enum PullCmd: Cmd {
+    static let meta = CmdMeta(
+        name: "pull",
+        desc: "Download an MLX model from Hugging Face (auto-detects hf / uvx / x-cmd)",
+        opts: [
+            OptMeta(name: "--hf-mirror", type: String.self, desc: "Hugging Face mirror endpoint", `default`: "https://hf-mirror.com"),
+            OptMeta(name: "--dest", type: String.self, desc: "Local destination directory (default: ~/.cache/huggingface/hub/<repo>)"),
+            OptMeta(name: "--json", type: Bool.self, desc: "Output JSON (default)"),
+        ],
+        args: [ArgMeta(name: "repo", desc: "Hugging Face repo id (e.g. mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit)", required: true)],
+        run: { p in
+            guard let repo = p.arg(0), !repo.isEmpty else {
+                cmdError("usage: macsay pull <repo-id> [--hf-mirror URL] [--dest PATH]")
+            }
+            let mirror = p.opt("--hf-mirror") as String? ?? "https://hf-mirror.com"
+            let dest = p.opt("--dest") as String?
+
+            // Apply HF_ENDPOINT (mirror) for this process so subprocess inherits it.
+            setenv("HF_ENDPOINT", mirror, 1)
+
+            do {
+                let path = try MlxEngineNative.pull(repo: repo, to: dest)
+                printJson([
+                    "ok": true,
+                    "repo": repo,
+                    "path": path,
+                    "mirror": mirror,
+                ])
+            } catch {
+                cmdError("pull failed: \(error)")
+            }
+        }
+    )
+}
+
 /// Auto-detect language segments in text.
 private func detectLanguages(_ text: String) -> [(locale: String, text: String)] {
     var segments: [(locale: String, text: String)] = []

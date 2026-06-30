@@ -35,6 +35,7 @@ enum MlxEngineNative {
     enum MlxError: Error {
         case modelNotFound(String)
         case synthesisFailed(String)
+        case pullFailed(String)
     }
 
     /// Run TTS in-process. Returns the WAV file path.
@@ -79,5 +80,91 @@ enum MlxEngineNative {
         }
 
         return outputURL.path
+    }
+
+    /// Pull an MLX-community model from Hugging Face into a local cache.
+    /// Auto-detects which tool is available (hf / uvx / x-cmd uvx) and uses
+    /// it to download. Sets HF_ENDPOINT (mirror) automatically.
+    static func pull(repo: String, to localDir: String? = nil) throws -> String {
+        let dest = localDir ?? defaultCachePath(for: repo)
+
+        if FileManager.default.fileExists(atPath: dest) {
+            // Already downloaded — verify it has the required files.
+            let contents = (try? FileManager.default.contentsOfDirectory(atPath: dest)) ?? []
+            if contents.contains(where: { $0.hasSuffix(".safetensors") }) {
+                return dest
+            }
+        }
+
+        try FileManager.default.createDirectory(
+            atPath: dest, withIntermediateDirectories: true
+        )
+
+        let env = ProcessInfo.processInfo.environment
+        var merged = env
+        merged["HF_ENDPOINT"] = env["HF_ENDPOINT"] ?? "https://hf-mirror.com"
+
+        // Tool detection chain: hf → uvx hf → x uvx hf
+        let candidates: [(label: String, tool: String, wrapperArgs: [String])] = [
+            ("hf", "hf", []),
+            ("uvx hf", "uvx", ["hf"]),
+            ("x-cmd uvx hf", "x", ["uvx", "hf"]),
+        ]
+        for c in candidates {
+            guard let path = findInPath(c.tool) else { continue }
+            let argv = [path] + c.wrapperArgs + ["download", repo, "--local-dir", dest]
+            _ = try runDownloader(label: c.label, argv: argv, env: merged)
+            return dest
+        }
+
+        throw MlxError.pullFailed(
+            "no hf / uvx / x-cmd found. install one: brew install uv, or x install uv"
+        )
+    }
+
+    private static func findInPath(_ name: String) -> String? {
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        for dir in path.split(separator: ":") {
+            let candidate = "\(dir)/\(name)"
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    private static func runDownloader(
+        label: String,
+        argv: [String],
+        env: [String: String]
+    ) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: argv[0])
+        process.arguments = Array(argv.dropFirst())
+        var procEnv = env
+        process.environment = procEnv
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        print("Pulling via \(label) ...")
+        try process.run()
+        process.waitUntilExit()
+
+        if process.terminationStatus != 0 {
+            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            let errMsg = String(data: errData, encoding: .utf8) ?? "unknown error"
+            throw MlxError.pullFailed("\(label): \(errMsg)")
+        }
+        return ""
+    }
+
+    /// Default cache path: ~/.cache/huggingface/hub/<repo-id-with-/-replaced>
+    private static func defaultCachePath(for repo: String) -> String {
+        let home = NSHomeDirectory()
+        let subdir = repo.replacingOccurrences(of: "/", with: "_")
+        return "\(home)/.cache/huggingface/hub/\(subdir)"
     }
 }
