@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import AVFoundation
 import ObjectiveC.runtime
+import ObjectiveC.runtime
 
 /// Common language / region shortcuts for `--locale`.
 struct LocaleShortcuts {
@@ -382,6 +383,7 @@ private func recordTTS(segments: [(locale: String, text: String)], outputPath: S
     for (index, segment) in segments.enumerated() {
         let tempPath = "/tmp/macsay_segment_\(index).aiff"
         tempFiles.append(tempPath)
+        try? FileManager.default.removeItem(atPath: tempPath)
 
         let synthesizer = NSSpeechSynthesizer()
         if let voice = findBestVoice(for: segment.locale) {
@@ -397,15 +399,44 @@ private func recordTTS(segments: [(locale: String, text: String)], outputPath: S
             _ = function(synthesizer, selector, segment.text as NSString, URL(fileURLWithPath: tempPath) as NSURL)
         }
 
-        while synthesizer.isSpeaking {
-            usleep(50_000)
-        }
+        // The private startSpeakingString:toURL: API returns immediately and
+        // synthesizes asynchronously in the background. Wait for the file size
+        // to stabilise (no growth for N consecutive polls) before concatenating.
+        waitForFileStable(at: tempPath, settlePolls: 3, timeoutSec: 30.0)
     }
 
     concatenateAudioFiles(tempFiles, output: outputPath)
 
     for temp in tempFiles {
         try? FileManager.default.removeItem(atPath: temp)
+    }
+}
+
+/// Poll `path` every 100ms; return once the file size has been stable for
+/// `settlePolls` consecutive checks OR `timeoutSec` elapses. This waits for
+/// NSSpeechSynthesizer's async file write to finish.
+private func waitForFileStable(at path: String, settlePolls: Int, timeoutSec: Double) {
+    let pollUSec: UInt32 = 100_000
+    let start = Date()
+    var lastSize: Int64 = -1
+    var stableCount = 0
+
+    while true {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+        let size = (attrs?[.size] as? Int64) ?? 0
+
+        if size > 0 && size == lastSize {
+            stableCount += 1
+            if stableCount >= settlePolls { return }
+        } else {
+            stableCount = 0
+            lastSize = size
+        }
+
+        if Date().timeIntervalSince(start) > timeoutSec {
+            return  // give up — caller will get whatever was written
+        }
+        usleep(pollUSec)
     }
 }
 
