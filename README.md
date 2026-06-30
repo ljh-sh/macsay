@@ -56,11 +56,12 @@ MLX 子选项
 `--mlx-ref-text TEXT`               参考音对应文字稿
 `--mlx-lang LANG`                   English / Chinese / Japanese / Korean / ...
 
-Locale 简写（按 `--locale XX-YY` 解析；nsspeech 引擎会按它选 voice）
-`--ar / --au / --ca / --cn / --cs / --da / --de / --el / --en / --es / --fi / --fr / --gb / --he / --hi / --hk / --hr / --hu / --id / --it / --ja / --ko / --ms / --nb / --nl / --pl / --pt / --ro / --ru / --sk / --sv / --th / --tr / --tw / --uk / --us / --vi`
-
 `--json`                            JSON 输出
 `--help` / `-h`                     帮助
+
+## TIP:
+
+Locale 简写（按 `--locale XX-YY` 解析，nsspeech 引擎会按它选 voice）——  `--ar / --au / --ca / --cn / --cs / --da / --de / --el / --en / --es / --fi / --fr / --gb / --he / --hi / --hk / --hr / --hu / --id / --it / --ja / --ko / --ms / --nb / --nl / --pl / --pt / --ro / --ru / --sk / --sv / --th / --tr / --tw / --uk / --us / --vi`
 
 ## Engines
 
