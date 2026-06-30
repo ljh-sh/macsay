@@ -82,24 +82,28 @@ enum MlxEngineNative {
         return outputURL.path
     }
 
-    /// Pull an MLX-community model from Hugging Face into a local cache.
-    /// Auto-detects which tool is available (hf / uvx / x-cmd uvx) and uses
-    /// it to download. Sets HF_ENDPOINT (mirror) automatically and forwards
-    /// any http_proxy / https_proxy from the parent environment.
+    /// Pull an MLX-community model from Hugging Face into the HF Hub cache.
+/// Auto-detects which tool is available (hf / uvx / x-cmd uvx) and uses
+/// it to download. Sets HF_ENDPOINT (mirror) automatically and forwards
+/// any http_proxy / https_proxy from the parent environment.
+///
+/// NOTE: We deliberately do NOT pass `--local-dir` — we let the download tool
+/// write to the standard HF Hub layout (`~/.cache/huggingface/hub/<repo>`),
+/// which is the same layout mlx-audio-swift's internal HubApi reads from.
+/// If we used `--local-dir`, the model would land in a custom path that the
+/// inference code would then refuse to use (cache miss → re-download).
     static func pull(repo: String, to localDir: String? = nil) throws -> String {
+        // Standard HF Hub cache layout: ~/.cache/huggingface/hub/models--<org>--<repo>
         let dest = localDir ?? defaultCachePath(for: repo)
 
+        // Quick check — if config.json + a safetensors already exist locally,
+        // skip the download. (mlx-audio-swift will do a deeper check at load time.)
         if FileManager.default.fileExists(atPath: dest) {
-            // Already downloaded — verify it has the required files.
             let contents = (try? FileManager.default.contentsOfDirectory(atPath: dest)) ?? []
             if contents.contains(where: { $0.hasSuffix(".safetensors") }) {
                 return dest
             }
         }
-
-        try FileManager.default.createDirectory(
-            atPath: dest, withIntermediateDirectories: true
-        )
 
         let env = ProcessInfo.processInfo.environment
         var merged = env
@@ -121,6 +125,10 @@ enum MlxEngineNative {
         ]
         for c in candidates {
             guard let path = findInPath(c.tool) else { continue }
+            // --local-dir: hf writes files directly into <dest> instead of the
+            // HF HubCache `models--<org>--<repo>/` layout. We need this because
+            // mlx-audio-swift's TTS.loadModel reads from `mlx-audio/<repo>/`
+            // (its own private layout), NOT from the HF HubCache.
             let argv = [path] + c.wrapperArgs + ["download", repo, "--local-dir", dest]
             _ = try runDownloader(label: c.label, argv: argv, env: merged)
             return dest
@@ -170,10 +178,13 @@ enum MlxEngineNative {
         return ""
     }
 
-    /// Default cache path: ~/.cache/huggingface/hub/<repo-id-with-/-replaced>
+    /// Default cache path: ~/.cache/huggingface/hub/mlx-audio/<repo-id-with-/-replaced>
+    /// Matches the layout `Blaizzy/mlx-audio-swift`'s `ModelUtils` writes to
+    /// when downloading models itself, so a `macsay pull`'d model is recognized
+    /// as already-cached by `TTS.loadModel(...)` (no re-download).
     private static func defaultCachePath(for repo: String) -> String {
         let home = NSHomeDirectory()
         let subdir = repo.replacingOccurrences(of: "/", with: "_")
-        return "\(home)/.cache/huggingface/hub/\(subdir)"
+        return "\(home)/.cache/huggingface/hub/mlx-audio/\(subdir)"
     }
 }
