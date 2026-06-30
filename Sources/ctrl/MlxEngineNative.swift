@@ -84,7 +84,8 @@ enum MlxEngineNative {
 
     /// Pull an MLX-community model from Hugging Face into a local cache.
     /// Auto-detects which tool is available (hf / uvx / x-cmd uvx) and uses
-    /// it to download. Sets HF_ENDPOINT (mirror) automatically.
+    /// it to download. Sets HF_ENDPOINT (mirror) automatically and forwards
+    /// any http_proxy / https_proxy from the parent environment.
     static func pull(repo: String, to localDir: String? = nil) throws -> String {
         let dest = localDir ?? defaultCachePath(for: repo)
 
@@ -103,6 +104,14 @@ enum MlxEngineNative {
         let env = ProcessInfo.processInfo.environment
         var merged = env
         merged["HF_ENDPOINT"] = env["HF_ENDPOINT"] ?? "https://hf-mirror.com"
+        // Forward proxy settings so the download tool can reach the network.
+        // `huggingface_hub` / `hf` / `uvx` all honour standard *_proxy env vars.
+        for key in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+                    "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY"] {
+            if let v = env[key], !v.isEmpty {
+                merged[key] = v
+            }
+        }
 
         // Tool detection chain: hf → uvx hf → x uvx hf
         let candidates: [(label: String, tool: String, wrapperArgs: [String])] = [

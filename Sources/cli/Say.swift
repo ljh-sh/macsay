@@ -242,19 +242,23 @@ enum VoicesCmd: Cmd {
 
 /// `macsay pull <repo>` — download an MLX-community model from Hugging Face.
 /// Auto-detects hf / uvx / x-cmd uvx and uses whichever is in PATH.
+/// Default repo: mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit
 enum PullCmd: Cmd {
     static let meta = CmdMeta(
         name: "pull",
-        desc: "Download an MLX model from Hugging Face (auto-detects hf / uvx / x-cmd)",
+        desc: "Download an MLX model from Hugging Face (auto-detects hf / uvx / x-cmd). Default: Qwen3-TTS-1.7B-CustomVoice-8bit",
         opts: [
             OptMeta(name: "--hf-mirror", type: String.self, desc: "Hugging Face mirror endpoint", `default`: "https://hf-mirror.com"),
             OptMeta(name: "--dest", type: String.self, desc: "Local destination directory (default: ~/.cache/huggingface/hub/<repo>)"),
             OptMeta(name: "--json", type: Bool.self, desc: "Output JSON (default)"),
         ],
-        args: [ArgMeta(name: "repo", desc: "Hugging Face repo id (e.g. mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit)", required: true)],
+        args: [ArgMeta(name: "repo", desc: "Hugging Face repo id (default: mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit)")],
         run: { p in
-            guard let repo = p.arg(0), !repo.isEmpty else {
-                cmdError("usage: macsay pull <repo-id> [--hf-mirror URL] [--dest PATH]")
+            let repo: String
+            if let r = p.arg(0), !r.isEmpty {
+                repo = r
+            } else {
+                repo = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
             }
             let mirror = p.opt("--hf-mirror") as String? ?? "https://hf-mirror.com"
             let dest = p.opt("--dest") as String?
